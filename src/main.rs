@@ -92,17 +92,17 @@ fn main() -> ! {
 
     // Initialise display. Using the default LUT speed setting
     let _ = display.setup(&mut delay, uc8151::LUT::Internal);
-    let text = "embedded-text\nis awesome!";
+    let text = "Hi! I'm 9names.\nTalk to\nme about\nEmbedded Rust!";
     // Note we're setting the Text color to `Off`. The driver is set up to treat Off as Black so that BMPs work as expected.
     let character_style = MonoTextStyle::new(&FONT_9X18_BOLD, BinaryColor::Off);
     let textbox_style = TextBoxStyleBuilder::new()
         .height_mode(HeightMode::FitToText)
         .alignment(HorizontalAlignment::Center)
-        .vertical_alignment(embedded_text::alignment::VerticalAlignment::Middle)
+        //.vertical_alignment(embedded_text::alignment::VerticalAlignment::Top)
         .paragraph_spacing(6)
         .build();
     // Bounding box for our text. Fill it with the opposite color so we can read the text.
-    let bounds = Rectangle::new(Point::new(157, 50), Size::new(WIDTH - 157, 0));
+    let bounds = Rectangle::new(Point::new(157, 10), Size::new(WIDTH - 157, 0));
     bounds
         .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
         .draw(&mut display)
@@ -114,14 +114,36 @@ fn main() -> ! {
 
     // Draw ferris
     let data = include_bytes!("../assets/ferris_intent_1bpp.bmp");
+    // Draw ferris backwards!
+    let data2 = include_bytes!("../assets/ferris_intent_1bpp_reverse.bmp");
     let tga: Bmp<BinaryColor> = Bmp::from_slice(data).unwrap();
     let image = Image::new(&tga, Point::zero());
+    let tga2: Bmp<BinaryColor> = Bmp::from_slice(data2).unwrap();
+    let image2 = Image::new(&tga2, Point::zero());
     let _ = image.draw(&mut display);
     let _ = display.update();
+    let mut counter = 0;
     loop {
+        // blink once a second
         led_pin.toggle().unwrap();
-        count_down.start(500_u32.milliseconds());
+        count_down.start(1000_u32.milliseconds());
         let _ = nb::block!(count_down.wait());
+        counter += 1;
+        // every two minutes, reverse ferris
+        if counter == 120 {
+            let _ = display.clear(BinaryColor::On);
+            let _ = image2.draw(&mut display);
+            text_box.draw(&mut display).unwrap();
+            let _ = display.update();
+        }
+        // at 4 minutes, put ferris back the right way.
+        if counter == 240 {
+            let _ = display.clear(BinaryColor::On);
+            let _ = image.draw(&mut display);
+            text_box.draw(&mut display).unwrap();
+            let _ = display.update();
+            counter = 0;
+        }
     }
 }
 
