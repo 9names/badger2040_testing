@@ -95,9 +95,8 @@ fn main() -> ! {
     // Get all the basic peripherals, and init clocks/timers
     // Enable 3.3V power or you won't see anything
     let mut power = pins.p3v3_en.into_push_pull_output();
-    let _ = power.set_high().unwrap();
+    power.set_high().unwrap();
 
-    // let mut count_down = board.timer.count_down();
     let mut led_pin = pins.led.into_push_pull_output();
 
     // TODO: use buttons somehow
@@ -125,8 +124,8 @@ fn main() -> ! {
         &embedded_hal::spi::MODE_0,
     );
 
-    let _ = dc.set_high();
-    let _ = cs.set_high();
+    dc.set_high().unwrap();
+    cs.set_high().unwrap();
 
     let mut count_down = timer.count_down();
     let mut display = uc8151::Uc8151::new(spi, cs, dc, busy, reset);
