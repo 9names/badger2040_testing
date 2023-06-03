@@ -1,6 +1,4 @@
-//! Blinks the LED on a Pico board
-//!
-//! This will blink an LED attached to GP25, which is the pin the Pico uses for the on-board LED.
+//! Display graphics and text on the badger2040 e-ink display
 #![no_std]
 #![no_main]
 
@@ -8,7 +6,6 @@ use bsp::entry;
 use defmt::*;
 use defmt_rtt as _;
 use embedded_hal::digital::v2::{OutputPin, ToggleableOutputPin};
-use embedded_time::fixed_point::FixedPoint;
 use panic_probe as _;
 
 // Provide an alias for our BSP so we can switch targets quickly.
@@ -31,64 +28,118 @@ use embedded_text::{
     style::{HeightMode, TextBoxStyleBuilder},
     TextBox,
 };
-use embedded_time::duration::*;
-use embedded_time::rate::units::Extensions;
-use pimoroni_badger2040::prelude::*;
 use uc8151::WIDTH;
 
 use tinybmp::Bmp;
+
+// A shorter alias for the Peripheral Access Crate, which provides low-level
+// register access
+use pimoroni_badger2040::hal::pac;
+use pimoroni_badger2040::hal::Timer;
+
+// A few traits required for using the CountDown timer
+use embedded_hal::timer::CountDown;
+use fugit::ExtU32;
+use fugit::RateExtU32;
+use hal::gpio;
+use hal::gpio::bank0;
+pub struct Buttons {
+    pub a: gpio::Pin<bank0::Gpio12, gpio::Input<gpio::Floating>>,
+    pub b: gpio::Pin<bank0::Gpio13, gpio::Input<gpio::Floating>>,
+    pub c: gpio::Pin<bank0::Gpio14, gpio::Input<gpio::Floating>>,
+    pub down: gpio::Pin<bank0::Gpio11, gpio::Input<gpio::Floating>>,
+    pub up: gpio::Pin<bank0::Gpio15, gpio::Input<gpio::Floating>>,
+}
+
 #[entry]
 fn main() -> ! {
     info!("Program start");
-    // Get all the basic peripherals, and init clocks/timers
-    let mut board = bsp::Board::take().unwrap();
-    // Enable 3.3V power or you won't see anything
-    let mut power = board.pins.p3v3_en.into_push_pull_output();
-    let _ = power.set_high();
 
-    let mut count_down = board.timer.count_down();
-    let mut led_pin = board.pins.led.into_push_pull_output();
+    let core = pac::CorePeripherals::take().unwrap();
+    // Grab our singleton objects
+    let mut pac = pac::Peripherals::take().unwrap();
+
+    // Set up the watchdog driver - needed by the clock setup code
+    let mut watchdog = hal::Watchdog::new(pac.WATCHDOG);
+
+    // Configure the clocks
+    //
+    // The default is to generate a 125 MHz system clock
+    let clocks = hal::clocks::init_clocks_and_plls(
+        pimoroni_badger2040::XOSC_CRYSTAL_FREQ,
+        pac.XOSC,
+        pac.CLOCKS,
+        pac.PLL_SYS,
+        pac.PLL_USB,
+        &mut pac.RESETS,
+        &mut watchdog,
+    )
+    .ok()
+    .unwrap();
+
+    // The single-cycle I/O block controls our GPIO pins
+    let sio = hal::Sio::new(pac.SIO);
+
+    // Set the pins up according to their function on this particular board
+    let pins = pimoroni_badger2040::Pins::new(
+        pac.IO_BANK0,
+        pac.PADS_BANK0,
+        sio.gpio_bank0,
+        &mut pac.RESETS,
+    );
+
+    // Configure the timer peripheral to be a CountDown timer for our blinky delay
+    let timer = Timer::new(pac.TIMER, &mut pac.RESETS);
+    let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
+
+    // Get all the basic peripherals, and init clocks/timers
+    // Enable 3.3V power or you won't see anything
+    let mut power = pins.p3v3_en.into_push_pull_output();
+    let _ = power.set_high().unwrap();
+
+    // let mut count_down = board.timer.count_down();
+    let mut led_pin = pins.led.into_push_pull_output();
 
     // TODO: use buttons somehow
-    let _buttons = bsp::Buttons {
-        a: board.pins.sw_a.into_floating_input(),
-        b: board.pins.sw_b.into_floating_input(),
-        c: board.pins.sw_c.into_floating_input(),
-        up: board.pins.sw_up.into_floating_input(),
-        down: board.pins.sw_down.into_floating_input(),
+    let _buttons = Buttons {
+        a: pins.sw_a.into_floating_input(),
+        b: pins.sw_b.into_floating_input(),
+        c: pins.sw_c.into_floating_input(),
+        up: pins.sw_up.into_floating_input(),
+        down: pins.sw_down.into_floating_input(),
     };
 
     // Set up the pins for the e-ink display
-    let _spi_sclk = board.pins.sclk.into_mode::<hal::gpio::FunctionSpi>();
-    let _spi_mosi = board.pins.mosi.into_mode::<hal::gpio::FunctionSpi>();
-    let spi = hal::Spi::<_, _, 8>::new(board.SPI0);
-    let mut dc = board.pins.inky_dc.into_push_pull_output();
-    let mut cs = board.pins.inky_cs_gpio.into_push_pull_output();
-    let busy = board.pins.inky_busy.into_pull_up_input();
-    let reset = board.pins.inky_res.into_push_pull_output();
+    let _spi_sclk = pins.sclk.into_mode::<hal::gpio::FunctionSpi>();
+    let _spi_mosi = pins.mosi.into_mode::<hal::gpio::FunctionSpi>();
+    let spi = hal::Spi::<_, _, 8>::new(pac.SPI0);
+    let mut dc = pins.inky_dc.into_push_pull_output();
+    let mut cs = pins.inky_cs_gpio.into_push_pull_output();
+    let busy = pins.inky_busy.into_pull_up_input();
+    let reset = pins.inky_res.into_push_pull_output();
+
     let spi = spi.init(
-        &mut board.RESETS,
-        board.clocks.peripheral_clock.freq(),
-        1_000_000u32.Hz(),
+        &mut pac.RESETS,
+        clocks.peripheral_clock.freq(),
+        RateExtU32::MHz(1),
         &embedded_hal::spi::MODE_0,
     );
 
     let _ = dc.set_high();
     let _ = cs.set_high();
 
+    let mut count_down = timer.count_down();
     let mut display = uc8151::Uc8151::new(spi, cs, dc, busy, reset);
     // Reset display
     display.disable();
-    count_down.start(<Milliseconds>::new(10));
+
+    count_down.start(10u32.millis());
     let _ = nb::block!(count_down.wait());
     display.enable();
-    count_down.start(<Milliseconds>::new(10));
+    count_down.start(10u32.millis());
     let _ = nb::block!(count_down.wait());
     // Wait for the screen to finish reset
     while display.is_busy() {}
-
-    let mut delay =
-        cortex_m::delay::Delay::new(board.SYST, board.clocks.system_clock.freq().integer());
 
     // Initialise display. Using the default LUT speed setting
     let _ = display.setup(&mut delay, uc8151::LUT::Internal);
@@ -124,11 +175,10 @@ fn main() -> ! {
     let _ = display.update();
     let mut counter = 0;
     loop {
+        count_down.start(1u32.secs());
+        counter += 1;
         // blink once a second
         led_pin.toggle().unwrap();
-        count_down.start(1000_u32.milliseconds());
-        let _ = nb::block!(count_down.wait());
-        counter += 1;
         // every two minutes, reverse ferris
         if counter == 120 {
             let _ = display.clear(BinaryColor::On);
@@ -144,6 +194,7 @@ fn main() -> ! {
             let _ = display.update();
             counter = 0;
         }
+        let _ = nb::block!(count_down.wait());
     }
 }
 
